@@ -1,0 +1,202 @@
+{
+    "views": [
+        {
+            "name": "v_alerts_triggered",
+            "definition_sql": " WITH f AS (\n         SELECT v_indicator_features.code,\n            v_indicator_features.name,\n            v_indicator_features.category,\n            v_indicator_features.display_unit,\n            v_indicator_features.latest_date,\n            v_indicator_features.latest_value,\n            v_indicator_features.value_1w,\n            v_indicator_features.delta_1w,\n            v_indicator_features.value_1m,\n            v_indicator_features.delta_1m,\n            v_indicator_features.value_3m,\n            v_indicator_features.delta_3m,\n            v_indicator_features.pctile_10y,\n            v_indicator_features.zscore_3y,\n            v_indicator_features.mean_3y,\n            v_indicator_features.std_3y\n           FROM v_indicator_features\n        ), s AS (\n         SELECT v_regime_snapshot.asof_date,\n            v_regime_snapshot.max_lag_days,\n            v_regime_snapshot.growth_score,\n            v_regime_snapshot.growth_label,\n            v_regime_snapshot.inflation_score,\n            v_regime_snapshot.inflation_label,\n            v_regime_snapshot.policy_score,\n            v_regime_snapshot.policy_label,\n            v_regime_snapshot.risk_score,\n            v_regime_snapshot.risk_label,\n            v_regime_snapshot.liquidity_score,\n            v_regime_snapshot.liquidity_label,\n            v_regime_snapshot.confidence_score,\n            v_regime_snapshot.confidence_label,\n            v_regime_snapshot.vix_latest,\n            v_regime_snapshot.fsi_latest,\n            v_regime_snapshot.nfci_latest,\n            v_regime_snapshot.core_pce_latest\n           FROM v_regime_snapshot\n        )\n SELECT s.asof_date,\n    a.alert\n   FROM s\n     CROSS JOIN LATERAL ( SELECT unnest(array_remove(ARRAY[\n                CASE\n                    WHEN (( SELECT f.latest_value\n                       FROM f\n                      WHERE f.code = 'vix'::text)) >= 25::numeric THEN 'VIX elevated (>=25): risk control mode.'::text\n                    ELSE NULL::text\n                END,\n                CASE\n                    WHEN (( SELECT f.delta_1m\n                       FROM f\n                      WHERE f.code = 'hy_oas'::text)) >= 0.50 THEN 'HY OAS widened >= 50 bps in 1M: credit stress rising.'::text\n                    ELSE NULL::text\n                END,\n                CASE\n                    WHEN (( SELECT f.delta_1m\n                       FROM f\n                      WHERE f.code = 'claims_4wma'::text)) > 0::numeric THEN 'Claims 4W MA rising vs 1M ago: growth risk increasing.'::text\n                    ELSE NULL::text\n                END,\n                CASE\n                    WHEN (( SELECT f.delta_1m\n                       FROM f\n                      WHERE f.code = 'financial_stress'::text)) > 0.25 THEN 'Financial stress index up sharply vs 1M ago.'::text\n                    ELSE NULL::text\n                END,\n                CASE\n                    WHEN s.risk_label = 'risk-off'::text THEN 'Regime: RISK-OFF. Consider de-risking and raising quality.'::text\n                    ELSE NULL::text\n                END], NULL::text)) AS alert) a;"
+        },
+        {
+            "name": "v_freshness_summary",
+            "definition_sql": " SELECT max(\n        CASE\n            WHEN category = ANY (ARRAY['rates'::text, 'credit'::text, 'vol'::text, 'risk'::text, 'liquidity'::text, 'fx'::text, 'curve'::text, 'labour'::text]) THEN lag_days\n            ELSE NULL::integer\n        END) AS market_max_lag_days,\n    max(\n        CASE\n            WHEN category = ANY (ARRAY['inflation'::text, 'growth'::text]) THEN lag_days\n            ELSE NULL::integer\n        END) AS macro_max_lag_days,\n    min(\n        CASE\n            WHEN freshness_status = ANY (ARRAY['stale'::text, 'missing'::text]) THEN 0\n            ELSE 1\n        END) AS all_ok\n   FROM v_indicator_freshness;"
+        },
+        {
+            "name": "v_indicator_features",
+            "definition_sql": " WITH latest AS (\n         SELECT v_indicator_latest.code,\n            v_indicator_latest.latest_date,\n            v_indicator_latest.latest_value\n           FROM v_indicator_latest\n        ), deltas AS (\n         SELECT l.code,\n            l.latest_date,\n            l.latest_value,\n            w1.value AS value_1w,\n            m1.value AS value_1m,\n            m3.value AS value_3m,\n            l.latest_value - w1.value AS delta_1w,\n            l.latest_value - m1.value AS delta_1m,\n            l.latest_value - m3.value AS delta_3m\n           FROM latest l\n             LEFT JOIN LATERAL ( SELECT v.raw_value AS value\n                   FROM indicator_values v\n                  WHERE v.code = l.code AND v.obs_date IS NOT NULL AND v.obs_date <= (l.latest_date - 7)\n                  ORDER BY v.obs_date DESC\n                 LIMIT 1) w1 ON true\n             LEFT JOIN LATERAL ( SELECT v.raw_value AS value\n                   FROM indicator_values v\n                  WHERE v.code = l.code AND v.obs_date IS NOT NULL AND v.obs_date <= (l.latest_date - 30)\n                  ORDER BY v.obs_date DESC\n                 LIMIT 1) m1 ON true\n             LEFT JOIN LATERAL ( SELECT v.raw_value AS value\n                   FROM indicator_values v\n                  WHERE v.code = l.code AND v.obs_date IS NOT NULL AND v.obs_date <= (l.latest_date - 90)\n                  ORDER BY v.obs_date DESC\n                 LIMIT 1) m3 ON true\n        ), pct10y AS (\n         SELECT l.code,\n                CASE\n                    WHEN count(v.raw_value) < 20 THEN NULL::numeric\n                    ELSE sum(\n                    CASE\n                        WHEN v.raw_value <= l.latest_value THEN 1\n                        ELSE 0\n                    END)::numeric / count(v.raw_value)::numeric\n                END AS pctile_10y\n           FROM latest l\n             JOIN indicator_values v ON v.code = l.code AND v.obs_date IS NOT NULL AND v.obs_date >= (l.latest_date - '10 years'::interval) AND v.obs_date <= l.latest_date\n          GROUP BY l.code, l.latest_value\n        ), z3y AS (\n         SELECT l.code,\n                CASE\n                    WHEN s.std_3y IS NULL OR s.std_3y = 0::numeric THEN NULL::numeric\n                    ELSE (l.latest_value - s.mean_3y) / s.std_3y\n                END AS zscore_3y,\n            s.mean_3y,\n            s.std_3y\n           FROM latest l\n             JOIN LATERAL ( SELECT avg(v.raw_value) AS mean_3y,\n                    stddev_samp(v.raw_value) AS std_3y\n                   FROM indicator_values v\n                  WHERE v.code = l.code AND v.obs_date IS NOT NULL AND v.obs_date >= (l.latest_date - '3 years'::interval) AND v.obs_date <= l.latest_date) s ON true\n        )\n SELECT i.code,\n    i.name,\n    i.category,\n    i.display_unit,\n    d.latest_date,\n    d.latest_value,\n    d.value_1w,\n    d.delta_1w,\n    d.value_1m,\n    d.delta_1m,\n    d.value_3m,\n    d.delta_3m,\n    p.pctile_10y,\n    z.zscore_3y,\n    z.mean_3y,\n    z.std_3y\n   FROM indicators i\n     JOIN deltas d ON d.code = i.code\n     LEFT JOIN pct10y p ON p.code = i.code\n     LEFT JOIN z3y z ON z.code = i.code\n  WHERE i.is_active IS TRUE;"
+        },
+        {
+            "name": "v_indicator_freshness",
+            "definition_sql": " SELECT i.code,\n    i.name,\n    i.category,\n    i.fred_frequency,\n    l.latest_date,\n    CURRENT_DATE - l.latest_date AS lag_days,\n        CASE\n            WHEN l.latest_date IS NULL THEN 'missing'::text\n            WHEN i.fred_frequency = 'd'::text AND (CURRENT_DATE - l.latest_date) <= 7 THEN 'ok'::text\n            WHEN i.fred_frequency = 'w'::text AND (CURRENT_DATE - l.latest_date) <= 21 THEN 'ok'::text\n            WHEN i.fred_frequency = 'm'::text AND (CURRENT_DATE - l.latest_date) <= 120 THEN 'ok'::text\n            WHEN (i.fred_frequency = ANY (ARRAY['q'::text, 'sa'::text, 'a'::text])) AND (CURRENT_DATE - l.latest_date) <= 200 THEN 'ok'::text\n            WHEN i.fred_frequency = 'd'::text AND (CURRENT_DATE - l.latest_date) <= 14 THEN 'warn'::text\n            WHEN i.fred_frequency = 'w'::text AND (CURRENT_DATE - l.latest_date) <= 35 THEN 'warn'::text\n            WHEN i.fred_frequency = 'm'::text AND (CURRENT_DATE - l.latest_date) <= 160 THEN 'warn'::text\n            ELSE 'stale'::text\n        END AS freshness_status\n   FROM indicators i\n     LEFT JOIN v_indicator_latest l ON l.code = i.code\n  WHERE i.is_active IS TRUE;"
+        },
+        {
+            "name": "v_indicator_latest",
+            "definition_sql": " SELECT DISTINCT ON (code) code,\n    obs_date AS latest_date,\n    raw_value AS latest_value\n   FROM indicator_values\n  WHERE obs_date IS NOT NULL\n  ORDER BY code, obs_date DESC;"
+        },
+        {
+            "name": "v_regime_snapshot",
+            "definition_sql": " WITH f AS (\n         SELECT v_indicator_features.code,\n            v_indicator_features.name,\n            v_indicator_features.category,\n            v_indicator_features.display_unit,\n            v_indicator_features.latest_date,\n            v_indicator_features.latest_value,\n            v_indicator_features.value_1w,\n            v_indicator_features.delta_1w,\n            v_indicator_features.value_1m,\n            v_indicator_features.delta_1m,\n            v_indicator_features.value_3m,\n            v_indicator_features.delta_3m,\n            v_indicator_features.pctile_10y,\n            v_indicator_features.zscore_3y,\n            v_indicator_features.mean_3y,\n            v_indicator_features.std_3y\n           FROM v_indicator_features\n        ), p AS (\n         SELECT ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'core_pce_yoy'::text) AS core_pce_delta_3m,\n            ( SELECT f.latest_value\n                   FROM f\n                  WHERE f.code = 'core_pce_yoy'::text) AS core_pce_latest,\n            ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'cpi_yoy'::text) AS cpi_delta_3m,\n            ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'industrial_prod_yoy'::text) AS ip_delta_3m,\n            ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'retail_sales_real'::text) AS retail_delta_3m,\n            ( SELECT f.delta_1m\n                   FROM f\n                  WHERE f.code = 'unemployment_rate'::text) AS unrate_delta_1m,\n            ( SELECT f.delta_1m\n                   FROM f\n                  WHERE f.code = 'claims_4wma'::text) AS claims_delta_1m,\n            ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'fed_funds_rate'::text) AS ffr_delta_3m,\n            ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'ust2y'::text) AS ust2y_delta_3m,\n            ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'real_yield_10y'::text) AS ry10_delta_3m,\n            ( SELECT f.delta_1m\n                   FROM f\n                  WHERE f.code = 'hy_oas'::text) AS hy_oas_delta_1m,\n            ( SELECT f.delta_1m\n                   FROM f\n                  WHERE f.code = 'ig_oas'::text) AS ig_oas_delta_1m,\n            ( SELECT f.latest_value\n                   FROM f\n                  WHERE f.code = 'financial_stress'::text) AS fsi_latest,\n            ( SELECT f.delta_1m\n                   FROM f\n                  WHERE f.code = 'financial_stress'::text) AS fsi_delta_1m,\n            ( SELECT f.latest_value\n                   FROM f\n                  WHERE f.code = 'vix'::text) AS vix_latest,\n            ( SELECT f.delta_1m\n                   FROM f\n                  WHERE f.code = 'vix'::text) AS vix_delta_1m,\n            ( SELECT f.latest_value\n                   FROM f\n                  WHERE f.code = 'nfci'::text) AS nfci_latest,\n            ( SELECT f.delta_1m\n                   FROM f\n                  WHERE f.code = 'nfci'::text) AS nfci_delta_1m,\n            ( SELECT f.delta_3m\n                   FROM f\n                  WHERE f.code = 'fed_balance_sheet'::text) AS walcl_delta_3m,\n            ( SELECT max(CURRENT_DATE - f.latest_date) AS max\n                   FROM f) AS max_lag_days,\n            ( SELECT max(f.latest_date) AS max\n                   FROM f) AS asof_date\n        ), scores AS (\n         SELECT\n                CASE\n                    WHEN p.ip_delta_3m IS NULL THEN 0\n                    WHEN p.ip_delta_3m > 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.retail_delta_3m IS NULL THEN 0\n                    WHEN p.retail_delta_3m > 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.unrate_delta_1m IS NULL THEN 0\n                    WHEN p.unrate_delta_1m <= 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.claims_delta_1m IS NULL THEN 0\n                    WHEN p.claims_delta_1m <= 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END AS growth_score,\n                CASE\n                    WHEN p.core_pce_delta_3m IS NULL THEN 0\n                    WHEN p.core_pce_delta_3m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.cpi_delta_3m IS NULL THEN 0\n                    WHEN p.cpi_delta_3m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END AS inflation_score,\n                CASE\n                    WHEN p.ffr_delta_3m IS NULL THEN 0\n                    WHEN p.ffr_delta_3m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.ust2y_delta_3m IS NULL THEN 0\n                    WHEN p.ust2y_delta_3m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.ry10_delta_3m IS NULL THEN 0\n                    WHEN p.ry10_delta_3m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END AS policy_score,\n                CASE\n                    WHEN p.hy_oas_delta_1m IS NULL THEN 0\n                    WHEN p.hy_oas_delta_1m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.ig_oas_delta_1m IS NULL THEN 0\n                    WHEN p.ig_oas_delta_1m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.vix_delta_1m IS NULL THEN 0\n                    WHEN p.vix_delta_1m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.fsi_delta_1m IS NULL THEN 0\n                    WHEN p.fsi_delta_1m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END AS risk_score,\n                CASE\n                    WHEN p.nfci_delta_1m IS NULL THEN 0\n                    WHEN p.nfci_delta_1m < 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END +\n                CASE\n                    WHEN p.walcl_delta_3m IS NULL THEN 0\n                    WHEN p.walcl_delta_3m > 0::numeric THEN 1\n                    ELSE '-1'::integer\n                END AS liquidity_score,\n            p.max_lag_days,\n            p.asof_date,\n            p.vix_latest,\n            p.fsi_latest,\n            p.nfci_latest,\n            p.core_pce_latest\n           FROM p\n        ), labels AS (\n         SELECT scores.growth_score,\n            scores.inflation_score,\n            scores.policy_score,\n            scores.risk_score,\n            scores.liquidity_score,\n            scores.max_lag_days,\n            scores.asof_date,\n            scores.vix_latest,\n            scores.fsi_latest,\n            scores.nfci_latest,\n            scores.core_pce_latest,\n                CASE\n                    WHEN scores.growth_score >= 2 THEN 'improving'::text\n                    WHEN scores.growth_score <= '-2'::integer THEN 'deteriorating'::text\n                    ELSE 'mixed'::text\n                END AS growth_label,\n                CASE\n                    WHEN scores.inflation_score >= 1 THEN 'cooling'::text\n                    WHEN scores.inflation_score <= '-1'::integer THEN 're-accelerating'::text\n                    ELSE 'sticky'::text\n                END AS inflation_label,\n                CASE\n                    WHEN scores.policy_score >= 2 THEN 'easing'::text\n                    WHEN scores.policy_score <= '-2'::integer THEN 'tightening'::text\n                    ELSE 'restrictive/steady'::text\n                END AS policy_label,\n                CASE\n                    WHEN scores.risk_score >= 2 THEN 'risk-on'::text\n                    WHEN scores.risk_score <= '-2'::integer THEN 'risk-off'::text\n                    ELSE 'neutral'::text\n                END AS risk_label,\n                CASE\n                    WHEN scores.liquidity_score >= 1 THEN 'improving'::text\n                    WHEN scores.liquidity_score <= '-1'::integer THEN 'tightening'::text\n                    ELSE 'neutral'::text\n                END AS liquidity_label\n           FROM scores\n        ), confidence AS (\n         SELECT labels.growth_score,\n            labels.inflation_score,\n            labels.policy_score,\n            labels.risk_score,\n            labels.liquidity_score,\n            labels.max_lag_days,\n            labels.asof_date,\n            labels.vix_latest,\n            labels.fsi_latest,\n            labels.nfci_latest,\n            labels.core_pce_latest,\n            labels.growth_label,\n            labels.inflation_label,\n            labels.policy_label,\n            labels.risk_label,\n            labels.liquidity_label,\n            (abs(labels.growth_score)::numeric / 4::numeric + abs(labels.inflation_score)::numeric / 2::numeric + abs(labels.policy_score)::numeric / 3::numeric + abs(labels.risk_score)::numeric / 4::numeric + abs(labels.liquidity_score)::numeric / 2::numeric) / 5::numeric AS confidence_score\n           FROM labels\n        )\n SELECT asof_date,\n    max_lag_days,\n    growth_score,\n    growth_label,\n    inflation_score,\n    inflation_label,\n    policy_score,\n    policy_label,\n    risk_score,\n    risk_label,\n    liquidity_score,\n    liquidity_label,\n    confidence_score,\n        CASE\n            WHEN confidence_score >= 0.67 THEN 'high'::text\n            WHEN confidence_score >= 0.40 THEN 'medium'::text\n            ELSE 'low'::text\n        END AS confidence_label,\n    vix_latest,\n    fsi_latest,\n    nfci_latest,\n    core_pce_latest\n   FROM confidence;"
+        },
+        {
+            "name": "v_regime_takeaways",
+            "definition_sql": " WITH s AS (\n         SELECT v_regime_snapshot.asof_date,\n            v_regime_snapshot.max_lag_days,\n            v_regime_snapshot.growth_score,\n            v_regime_snapshot.growth_label,\n            v_regime_snapshot.inflation_score,\n            v_regime_snapshot.inflation_label,\n            v_regime_snapshot.policy_score,\n            v_regime_snapshot.policy_label,\n            v_regime_snapshot.risk_score,\n            v_regime_snapshot.risk_label,\n            v_regime_snapshot.liquidity_score,\n            v_regime_snapshot.liquidity_label,\n            v_regime_snapshot.confidence_score,\n            v_regime_snapshot.confidence_label,\n            v_regime_snapshot.vix_latest,\n            v_regime_snapshot.fsi_latest,\n            v_regime_snapshot.nfci_latest,\n            v_regime_snapshot.core_pce_latest\n           FROM v_regime_snapshot\n        )\n SELECT asof_date,\n    array_remove(ARRAY[\n        CASE\n            WHEN risk_label = 'risk-on'::text THEN 'Risk conditions look supportive: credit/vol/stress are improving overall.'::text\n            WHEN risk_label = 'risk-off'::text THEN 'Risk warning: credit/vol/stress are deteriorating; tighten risk and raise quality.'::text\n            ELSE 'Risk conditions are mixed; avoid over-committing to one-direction bets.'::text\n        END,\n        CASE\n            WHEN inflation_label = 'cooling'::text AND (policy_label = ANY (ARRAY['easing'::text, 'restrictive/steady'::text])) THEN 'Inflation appears to be cooling, which usually helps duration and equity multiples.'::text\n            WHEN inflation_label = 're-accelerating'::text THEN 'Inflation looks to be re-accelerating; be careful with long duration and expensive growth.'::text\n            ELSE 'Inflation looks sticky; markets may stay sensitive to inflation surprises.'::text\n        END,\n        CASE\n            WHEN growth_label = 'improving'::text THEN 'Growth momentum is improving; cyclicals and risk assets typically hold up better.'::text\n            WHEN growth_label = 'deteriorating'::text THEN 'Growth momentum is deteriorating; lean defensive and watch for credit spillover.'::text\n            ELSE 'Growth is mixed; prefer barbell positioning (quality + selective cyclicals).'::text\n        END,\n        CASE\n            WHEN liquidity_label = 'improving'::text THEN 'Liquidity/conditions are improving, which tends to support rallies and dips being bought.'::text\n            WHEN liquidity_label = 'tightening'::text THEN 'Liquidity/conditions are tightening; reduce leverage and watch funding stress.'::text\n            ELSE NULL::text\n        END], NULL::text) AS bullets,\n    confidence_label,\n    max_lag_days\n   FROM s;"
+        }
+    ],
+    "tables": [
+        {
+            "name": "indicator_values",
+            "columns": [
+                {
+                    "type": "text",
+                    "column": "code",
+                    "default": null,
+                    "nullable": "NO"
+                },
+                {
+                    "type": "text",
+                    "column": "observation_date",
+                    "default": null,
+                    "nullable": "NO"
+                },
+                {
+                    "type": "numeric",
+                    "column": "raw_value",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "timestamp with time zone",
+                    "column": "created_at",
+                    "default": "now()",
+                    "nullable": "YES"
+                },
+                {
+                    "type": "date",
+                    "column": "obs_date",
+                    "default": null,
+                    "nullable": "YES"
+                }
+            ],
+            "constraints": [
+                {
+                    "definition": "FOREIGN KEY (code) REFERENCES indicators(code) ON UPDATE CASCADE ON DELETE CASCADE",
+                    "constraint_name": "indicator_values_code_fkey",
+                    "constraint_type": "f"
+                },
+                {
+                    "definition": "PRIMARY KEY (code, observation_date)",
+                    "constraint_name": "indicator_values_pkey",
+                    "constraint_type": "p"
+                }
+            ]
+        },
+        {
+            "name": "indicators",
+            "columns": [
+                {
+                    "type": "text",
+                    "column": "code",
+                    "default": null,
+                    "nullable": "NO"
+                },
+                {
+                    "type": "text",
+                    "column": "fred_series_id",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "text",
+                    "column": "fred_units",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "text",
+                    "column": "fred_frequency",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "text",
+                    "column": "fred_aggregation_method",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "date",
+                    "column": "fred_observation_start",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "date",
+                    "column": "fred_observation_end",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "smallint",
+                    "column": "fred_output_type",
+                    "default": "1",
+                    "nullable": "YES"
+                },
+                {
+                    "type": "text",
+                    "column": "name",
+                    "default": null,
+                    "nullable": "NO"
+                },
+                {
+                    "type": "text",
+                    "column": "category",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "text",
+                    "column": "display_unit",
+                    "default": null,
+                    "nullable": "YES"
+                },
+                {
+                    "type": "boolean",
+                    "column": "is_active",
+                    "default": "true",
+                    "nullable": "YES"
+                },
+                {
+                    "type": "text",
+                    "column": "transform",
+                    "default": "'none'::text",
+                    "nullable": "YES"
+                }
+            ],
+            "constraints": [
+                {
+                    "definition": "PRIMARY KEY (code)",
+                    "constraint_name": "indicators_pkey",
+                    "constraint_type": "p"
+                }
+            ]
+        }
+    ],
+    "indexes": [
+        {
+            "name": "idx_indicator_values_code_obs_date_desc",
+            "table_name": "indicator_values",
+            "definition_sql": "CREATE INDEX idx_indicator_values_code_obs_date_desc ON public.indicator_values USING btree (code, obs_date DESC) WHERE (obs_date IS NOT NULL)"
+        },
+        {
+            "name": "indicator_values_pkey",
+            "table_name": "indicator_values",
+            "definition_sql": "CREATE UNIQUE INDEX indicator_values_pkey ON public.indicator_values USING btree (code, observation_date)"
+        },
+        {
+            "name": "indicators_pkey",
+            "table_name": "indicators",
+            "definition_sql": "CREATE UNIQUE INDEX indicators_pkey ON public.indicators USING btree (code)"
+        }
+    ],
+    "triggers": [
+        {
+            "name": "trg_indicator_values_set_obs_date",
+            "table_name": "indicator_values",
+            "definition_sql": "CREATE TRIGGER trg_indicator_values_set_obs_date BEFORE INSERT OR UPDATE OF observation_date ON indicator_values FOR EACH ROW EXECUTE FUNCTION fn_indicator_values_set_obs_date()"
+        }
+    ],
+    "functions": [
+        {
+            "name": "fn_indicator_values_set_obs_date",
+            "definition_sql": "CREATE OR REPLACE FUNCTION public.fn_indicator_values_set_obs_date()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nbegin\n  -- Default\n  new.obs_date := null;\n\n  if new.observation_date is not null then\n    begin\n      -- Parse expected FRED format: YYYY-MM-DD\n      new.obs_date := to_date(new.observation_date, 'YYYY-MM-DD');\n    exception when others then\n      -- If parsing fails, don't block ingestion; just store NULL\n      new.obs_date := null;\n    end;\n  end if;\n\n  return new;\nend;\n$function$\n"
+        }
+    ],
+    "generated_at": "2025-12-19T16:08:51.033839+00:00"
+}

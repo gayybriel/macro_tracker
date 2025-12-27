@@ -1,0 +1,22 @@
+code,fred_series_id,fred_units,fred_frequency,fred_aggregation_method,fred_observation_start,fred_observation_end,fred_output_type,name,category,display_unit,is_active,transform
+breakeven_10y,T10YIE,lin,d,eop,1990-01-01,,1,10Y Breakeven Inflation,inflation,%,true,none
+claims_4wma,IC4WSA,lin,w,eop,1990-01-01,,1,Initial Jobless Claims (4W MA),labour,number,true,none
+core_cpi_yoy,CPILFESL,pc1,m,avg,1990-01-01,,1,US Core CPI YoY,inflation,% YoY,true,none
+core_pce_yoy,PCEPILFE,pc1,m,avg,1990-01-01,,1,US Core PCE YoY,inflation,% YoY,true,none
+cpi_yoy,CPIAUCSL,pc1,m,avg,1990-01-01,,1,US CPI YoY (headline),inflation,% YoY,true,none
+curve_10y_2y,T10Y2Y,lin,d,eop,1990-01-01,,1,US Yield Curve (10Y–2Y),curve,bps,true,spread
+dollar_index,DTWEXBGS,lin,d,eop,1990-01-01,,1,Trade-Weighted USD Index (Broad),fx,index,true,none
+fed_balance_sheet,WALCL,lin,w,eop,1990-01-01,,1,Fed Total Assets (Balance Sheet),liquidity,$,true,none
+fed_funds_rate,FEDFUNDS,lin,m,eop,1990-01-01,,1,Effective Federal Funds Rate,rates,%,true,none
+financial_stress,STLFSI4,lin,w,eop,1990-01-01,,1,St. Louis Fed Financial Stress Index,risk,index,true,none
+hy_oas,BAMLH0A0HYM2,lin,d,eop,1990-01-01,,1,US High Yield OAS,credit,%,true,none
+ig_oas,BAMLC0A0CM,lin,d,eop,1990-01-01,,1,US Investment Grade OAS,credit,%,true,none
+industrial_prod_yoy,INDPRO,pc1,m,avg,1990-01-01,,1,Industrial Production YoY,growth,% YoY,true,none
+nfci,NFCI,lin,w,eop,1990-01-01,,1,Chicago Fed Natl Financial Conditions,liquidity,index,true,none
+ppi_manu,PCUOMFGOMFG,pc1,m,avg,1990-01-01,,1,"US Producer Price Index by Industry: Total Manufacturing Industries ",inflation,index,true,none
+real_yield_10y,DFII10,lin,d,eop,1990-01-01,,1,US 10Y Real Yield (TIPS),rates,%,true,none
+retail_sales_real,RRSFS,pc1,m,avg,1990-01-01,,1,Real Retail & Food Services Sales YoY,growth,% YoY,true,none
+unemployment_rate,UNRATE,lin,m,avg,1990-01-01,,1,US Unemployment Rate,labour,%,true,none
+ust10y,DGS10,lin,d,eop,1990-01-01,,1,US 10Y Treasury Yield,rates,%,true,none
+ust2y,DGS2,lin,d,eop,1990-01-01,,1,US 2Y Treasury Yield,rates,%,true,none
+vix,VIXCLS,lin,d,eop,1990-01-01,,1,CBOE Volatility Index (VIX),vol,index,true,none
