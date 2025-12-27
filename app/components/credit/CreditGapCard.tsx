@@ -56,7 +56,7 @@ export default function CreditGapCard() {
     if (!stats) return null;
 
     // --- Value Display Logic ---
-    const valueToShow = hoveredPoint?.value !== undefined ? hoveredPoint.value : stats.gap_bps;
+    const valueToShow = hoveredPoint?.value ?? stats.gap_bps ?? 0;
     const dateToShow = hoveredPoint?.date || stats.as_of;
 
     const formattedValue = valueToShow.toFixed(0);

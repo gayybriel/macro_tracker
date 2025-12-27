@@ -1,4 +1,4 @@
-import { PortfolioPosition, PortfolioGroup } from '../types/portfolio';
+import { PortfolioPosition, PortfolioGroup } from '../../types/portfolio';
 
 export const groupPortfolio = (positions: PortfolioPosition[]): {
     groups: PortfolioGroup[];
