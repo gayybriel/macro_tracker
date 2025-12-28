@@ -1,5 +1,4 @@
 export interface PortfolioPosition {
-    account: string;
     code: string;
     asset_name: string;
     asset_type: string;     // 'stock','etf','fund','mmf','gold','crypto','cash'

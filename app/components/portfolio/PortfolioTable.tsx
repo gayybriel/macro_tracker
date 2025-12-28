@@ -41,7 +41,7 @@ export default function PortfolioTable({ groups, totalSgd }: Props) {
     });
 
     // Editing State
-    // ID key = account + code to be unique enough for view
+    // ID key uses code to be unique enough for view
     const [editingKey, setEditingKey] = useState<string | null>(null);
     const [editValue, setEditValue] = useState<string>("");
     const [isSaving, setIsSaving] = useState(false);
@@ -75,7 +75,6 @@ export default function PortfolioTable({ groups, totalSgd }: Props) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     code: item.code,
-                    account: item.account,
                     new_quantity: newQty
                 })
             });
@@ -141,7 +140,7 @@ export default function PortfolioTable({ groups, totalSgd }: Props) {
                                 {group.items.map((item, idx) => {
                                     const warnings = checkFreshness(item);
                                     const itemWeight = totalSgd > 0 ? ((item.value_sgd || 0) / totalSgd * 100) : 0;
-                                    const uniqueKey = `${item.account}-${item.code}`;
+                                    const uniqueKey = item.code;
                                     const isEditing = editingKey === uniqueKey;
 
                                     return (

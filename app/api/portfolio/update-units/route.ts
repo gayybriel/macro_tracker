@@ -11,9 +11,9 @@ export async function POST(req: Request) {
     }
 
     try {
-        const { code, account, new_quantity } = await req.json();
+        const { code, new_quantity } = await req.json();
 
-        if (!code || !account || new_quantity === undefined) {
+        if (!code || new_quantity === undefined) {
             return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
         }
 
@@ -33,19 +33,8 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: `Asset not found: ${code}` }, { status: 404 });
         }
 
-        // 2. Resolve Account ID (assuming 'account' is the name)
-        // We try both 'name' and 'code' or just 'name' depending on typical schema.
-        // Assuming column is 'name' based on standard practices.
-        const accountRes = await fetch(`${supabaseUrl}/rest/v1/accounts?name=eq.${account}&select=account_id`, { headers });
-        const accounts = await accountRes.json();
-        const accountId = accounts[0]?.account_id;
-
-        if (!accountId) {
-            return NextResponse.json({ error: `Account not found: ${account}` }, { status: 404 });
-        }
-
-        // 3. Update Position
-        const updateRes = await fetch(`${supabaseUrl}/rest/v1/positions?asset_id=eq.${assetId}&account_id=eq.${accountId}`, {
+        // 2. Update Position (no account dimension anymore)
+        const updateRes = await fetch(`${supabaseUrl}/rest/v1/positions?asset_id=eq.${assetId}`, {
             method: 'PATCH',
             headers,
             body: JSON.stringify({
